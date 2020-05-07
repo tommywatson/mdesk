@@ -1,8 +1,11 @@
 /**
  * mdesk - trash talking multiple desktop for win32
  * © 2020 Shackledragger LLC. All Rights Reserved.
+ *
+ * http://shackledragger.com
+ *
  */
- 
+
 /*
 MIT License
 
@@ -28,9 +31,9 @@ SOFTWARE.
  */
 
 /*
- * Add these flags to mingw the linker to get
- * rid of the console for a win32 version
- * -Wl,-subsystem,windows 
+ * Add these flags to mingw linker to get
+ * rid of the console on a real win32 install
+ * -Wl,-subsystem,windows
  */
 
 #include <windows.h>
@@ -45,7 +48,6 @@ typedef struct {
     uint32_t _n_hwnd;
     uint32_t _max_hwnd;
     HWND *_hwnds;
-    HWND _active;
 } Desktop;
 
 // Ignore windows that have this in their title
@@ -59,6 +61,7 @@ typedef struct {
     uint8_t _log;
     FILE *_fp;
     char _logfile[256];
+    uint8_t _locked;
     uint8_t _always_on_top;
     HINSTANCE _hinstance;
     HWND _hwnd;
@@ -80,8 +83,9 @@ static char szWindowClass[] = "mdesk";
 static char szTitle[] = "Multidesktop";
 static State _state;
 
-#define     ID_About            0x801
 #define     ID_Exit             0x800
+#define     ID_About            0x801
+#define     ID_Lock             0x802
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -112,12 +116,11 @@ int CALLBACK WinMain(
     wcex.hbrBackground  = brush;
     wcex.lpszMenuName   = NULL;
     wcex.lpszClassName  = szWindowClass;
-
     if (!RegisterClassA(&wcex)) {
         MessageBoxA(NULL,"Call to RegisterClassEx failed!",szTitle,0);
         return 1;
     }
-    
+
     // Get the user dir for the logger
     ExpandEnvironmentStrings("%HOMEDRIVE%%HOMEPATH%",
                              _state._logfile,
@@ -125,7 +128,6 @@ int CALLBACK WinMain(
     // should really make sure this fits
     strcat(_state._logfile,"\\mdesk.log");
 
-    _state._log++;
     _state._always_on_top++;
     if(_state._log) {
 #       ifndef __MINGW64_VERSION_MAJOR
@@ -139,24 +141,20 @@ int CALLBACK WinMain(
     _state._n_buttons=5;
     _state._button_w=20;
     _state._button_space=2;
-    _state._x=2415;
-    _state._y=1375;
-    _state._x=2430;
-    _state._y=1365;
     _state._w=_state._n_buttons*_state._button_w+5;
     _state._h=_state._button_w+4;
-    _state._hwnd=CreateWindowA(szWindowClass,
-                               szTitle,
-                               WS_POPUP,
-                               //WS_OVERLAPPEDWINDOW,
-                               _state._x,
-                               _state._y,
-                               _state._w,
-                               _state._h,
-                               0,
-                               0,
-                               hInstance,
-                               0);
+    _state._hwnd=CreateWindowExA(WS_EX_TOOLWINDOW,
+                                 szWindowClass,
+                                 szTitle,
+                                 WS_POPUP,
+                                 _state._x,
+                                 _state._y,
+                                 _state._w,
+                                 _state._h,
+                                 0,
+                                 0,
+                                 hInstance,
+                                 0);
 
     if (!_state._hwnd) {
         MessageBoxA(NULL,"Call to CreateWindow failed!",szTitle,0);
@@ -178,11 +176,22 @@ int CALLBACK WinMain(
     }
     // Free up the brush
     DeleteObject(brush);
+
+    // clean up memory
+    for(uint32_t i=0;i<_state._n_buttons;++i) {
+        free((_state._desktops+i)->_hwnds);
+    }
+    for(Ignore *ignore=_state._ignore;ignore;) {
+        Ignore *tmp=ignore;
+        ignore=ignore->_next;
+        free(tmp);
+    }
+
     // cleanup the logger
     if(_state._fp) {
         fclose(_state._fp);
     }
-    
+
     return (int)msg.wParam;
 }
 
@@ -242,7 +251,7 @@ void position_window(void) {
  */
 uint8_t ignore(const char *name) {
     uint8_t ignore=!(name&&*name);
-    
+
     if(!ignore) {
         for(Ignore *check=_state._ignore;check;check=check->_next) {
             //if(!strcmpi(name,check->_name)) {
@@ -275,7 +284,7 @@ void add_ignore(const char *name) {
 void default_ignores(void) {
     add_ignore(szTitle);
     add_ignore("Program Manager");
-    add_ignore("Slack");
+    //add_ignore("Slack");
 }
 
 /**
@@ -297,7 +306,7 @@ void print(void) {
 }
 
 /**
- * @brief Check if we are higing this window
+ * @brief Check if we are hiding this window
  * @return true/false
  */
 uint32_t hiding(HWND hwnd) {
@@ -318,14 +327,14 @@ uint32_t hiding(HWND hwnd) {
  * @brief Show all hidden windows
  */
 void show_all(void) {
-	for (uint32_t i = 0; i < _state._n_buttons; ++i) {
-		Desktop *desktop = _state._desktops + i;
-		for (uint32_t w = 0; w < desktop->_n_hwnd; ++w) {
-			ShowWindow(*(desktop->_hwnds + w), SW_SHOW);
-		}
+    for (uint32_t i = 0; i < _state._n_buttons; ++i) {
+        Desktop *desktop = _state._desktops + i;
+        for (uint32_t w = 0; w < desktop->_n_hwnd; ++w) {
+            ShowWindowAsync(*(desktop->_hwnds + w), SW_SHOW);
+        }
         // cleanup this desktop
         desktop->_n_hwnd=0;
-	}
+    }
 }
 
 /**
@@ -334,14 +343,10 @@ void show_all(void) {
 void show_windows(void) {
 	Desktop *desktop = _state._desktops + _state._button;
 	for (uint32_t i = 0; i < desktop->_n_hwnd; ++i) {
-		ShowWindow(*(desktop->_hwnds + desktop->_n_hwnd - i - 1), SW_SHOW);
-	}
-	if (desktop->_active) {
-		ShowWindow(desktop->_active, SW_SHOW);
+		ShowWindowAsync(*(desktop->_hwnds + desktop->_n_hwnd - i - 1), SW_SHOW);
 	}
 	// clear the list
 	desktop->_n_hwnd = 0;
-	desktop->_active = 0;
 }
 
 /**
@@ -349,7 +354,7 @@ void show_windows(void) {
  * @param code
  * @param w_param
  * @param l_param
- * @return 
+ * @return
  */
 LRESULT mouse_hook(int code,WPARAM w_param,LPARAM l_param) {
     if(code>=0) {
@@ -377,11 +382,11 @@ LRESULT mouse_hook(int code,WPARAM w_param,LPARAM l_param) {
  */
 void wm_lbuttondown(WPARAM w_param,LPARAM l_param) {
     (void)w_param;
-    if(!_state._dragging) {
+    if(!_state._locked&&!_state._dragging) {
         _state._dragging++;
         _state._dx=GET_X_LPARAM(l_param);
         _state._dy=GET_Y_LPARAM(l_param);
-        
+
         // hook it or you're nobody
         /*
         if(_state._mouse_hook==0) {
@@ -409,6 +414,7 @@ void wm_rbuttondown(WPARAM w_param, LPARAM l_param) {
         AppendMenuA(hmenu,MF_SEPARATOR,0,0);
         AppendMenuA(hmenu,MF_STRING,1,"Application");
         AppendMenuA(hmenu,MF_SEPARATOR,0,0);
+        AppendMenuA(hmenu,MF_STRING,ID_Lock,"&Lock");
         AppendMenuA(hmenu,MF_STRING,ID_About,"&About");
         AppendMenuA(hmenu,MF_STRING,ID_Exit,"E&xit");
         // Pop up!
@@ -420,6 +426,10 @@ void wm_rbuttondown(WPARAM w_param, LPARAM l_param) {
                          0);
         DestroyMenu(hmenu);
         switch(n) {
+            case ID_Lock:
+                ++_state._locked;
+                _state._locked&=1;
+                break;
             case ID_About:
                 about();
                 break;
@@ -443,7 +453,7 @@ void wm_rbuttondown(WPARAM w_param, LPARAM l_param) {
 void wm_lbuttonup(WPARAM w_param,LPARAM l_param) {
     (void)w_param;
     (void)l_param;
-	_state._dragging = 0;
+	_state._dragging=0;
 	if (_state._mouse_hook) {
 		//UnhookWindowsHookEx(_state._mouse_hook);
 		_state._mouse_hook = 0;
@@ -486,7 +496,7 @@ uint32_t get_button(LPARAM l_param) {
  * @brief Handle windows enumeration callback
  * @param hwnd
  * @param l_param
- * @return 
+ * @return
  */
 BOOL CALLBACK enum_windows(HWND hwnd,LPARAM l_param) {
     char name[128];

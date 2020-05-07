@@ -25,3 +25,6 @@ commit: clean
 	git commit
 	git push
 
+dollars:
+	sloccount .
+
