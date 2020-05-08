@@ -1,9 +1,8 @@
 /**
- * mdesk - trash talking multiple desktop for win32
+ * mdesk - brain dead multiple desktop for win32
  * © 2020 Shackledragger LLC. All Rights Reserved.
  *
  * http://shackledragger.com
- *
  */
 
 /*
@@ -61,8 +60,8 @@ typedef struct {
     uint8_t _log;
     FILE *_fp;
     char _logfile[256];
-    uint8_t _locked;
-    uint8_t _always_on_top;
+    uint32_t _locked;
+    uint32_t _always_on_top;
     HINSTANCE _hinstance;
     HWND _hwnd;
     HHOOK _mouse_hook;
@@ -80,12 +79,13 @@ typedef struct {
 
 // Global variables
 static char szWindowClass[] = "mdesk";
-static char szTitle[] = "Multidesktop";
+static char szShackledragger[] = "shackledragger";
 static State _state;
 
 #define     ID_Exit             0x800
 #define     ID_About            0x801
 #define     ID_Lock             0x802
+#define     ID_AOT              0x803
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -101,6 +101,7 @@ int CALLBACK WinMain(
    _In_ int       nCmdShow
 )
 {
+    void load_registry(void);
     (void)hPrevInstance;
     (void)lpCmdLine;
     WNDCLASSA wcex;
@@ -117,7 +118,7 @@ int CALLBACK WinMain(
     wcex.lpszMenuName   = NULL;
     wcex.lpszClassName  = szWindowClass;
     if (!RegisterClassA(&wcex)) {
-        MessageBoxA(NULL,"Call to RegisterClassEx failed!",szTitle,0);
+        MessageBoxA(NULL,"Call to RegisterClassEx failed!",szWindowClass,0);
         return 1;
     }
 
@@ -128,7 +129,7 @@ int CALLBACK WinMain(
     // should really make sure this fits
     strcat(_state._logfile,"\\mdesk.log");
 
-    _state._always_on_top++;
+    //++_state._log;
     if(_state._log) {
 #       ifndef __MINGW64_VERSION_MAJOR
 #           pragma warning(disable : 4996)
@@ -137,6 +138,7 @@ int CALLBACK WinMain(
     }
 
     // init
+    load_registry();
     _state._hinstance=hInstance;
     _state._n_buttons=5;
     _state._button_w=20;
@@ -145,7 +147,7 @@ int CALLBACK WinMain(
     _state._h=_state._button_w+4;
     _state._hwnd=CreateWindowExA(WS_EX_TOOLWINDOW,
                                  szWindowClass,
-                                 szTitle,
+                                 szWindowClass,
                                  WS_POPUP,
                                  _state._x,
                                  _state._y,
@@ -157,7 +159,7 @@ int CALLBACK WinMain(
                                  0);
 
     if (!_state._hwnd) {
-        MessageBoxA(NULL,"Call to CreateWindow failed!",szTitle,0);
+        MessageBoxA(NULL,"Call to CreateWindow failed!",szWindowClass,0);
         return 1;
     }
     void create_buttons(void);
@@ -193,6 +195,91 @@ int CALLBACK WinMain(
     }
 
     return (int)msg.wParam;
+}
+
+/**
+ * @brief Open the registry
+ * @param key
+ * @param path
+ * @return key
+ */
+HKEY open_reg(HKEY *key) {
+    char name[256];
+    sprintf(name,"Software\\%s",szShackledragger);
+    if(ERROR_SUCCESS!=RegCreateKeyExA(HKEY_CURRENT_USER,
+                                      name,
+                                      0,
+                                      0,
+                                      REG_OPTION_NON_VOLATILE,
+                                      KEY_ALL_ACCESS,
+                                      0,
+                                      key,
+                                      0)) {
+        Log("Cannot open key\n");
+        *key=INVALID_HANDLE_VALUE;
+    }
+    return *key;
+}
+
+/**
+ * @brief Save a uint32 to the registry
+ * @param key
+ * @param value
+ */
+void save(char *key,uint32_t value) {
+    HKEY hkey=open_reg(&hkey);
+
+    Log("Saving %s = %d\n",key,value);
+    if(hkey!=INVALID_HANDLE_VALUE) {
+        LSTATUS status=RegSetValueExA(hkey,
+                                      key,
+                                      0,
+                                      REG_DWORD,
+                                      (void *)&value,sizeof(value));
+        if(status!=ERROR_SUCCESS) {
+             Log("Failed to write %s = %d [%ld:%0lx]\n",key,value,status,status);
+         }
+        RegCloseKey(hkey);
+    }
+}
+
+/**
+ * @brief Save a uint32 to the registry
+ * @param key
+ * @param value
+ */
+void load(char *key,uint32_t *value) {
+    HKEY hkey=open_reg(&hkey);
+
+    Log("Reading %s\n",key);
+    if(hkey!=INVALID_HANDLE_VALUE) {
+        DWORD type,length=sizeof(value);
+        RegQueryValueExA(hkey,key,0,&type,(void *)value,&length);
+        RegCloseKey(hkey);
+        Log("Read %s = %d\n",key,*value);
+    }
+}
+
+/**
+ * @brief Save the position to the registry
+ */
+void save_position(void) {
+    save("x",_state._x);
+    save("y",_state._y);
+    save("buttons",_state._n_buttons);
+    save("locked",_state._locked);
+    save("always on top",_state._always_on_top);
+}
+
+/**
+ * @brief Load status from
+ */
+void load_registry(void) {
+    load("x",&_state._x);
+    load("y",&_state._y);
+    load("buttons",&_state._n_buttons);
+    load("locked",&_state._locked);
+    load("always on top",&_state._always_on_top);
 }
 
 /**
@@ -282,9 +369,8 @@ void add_ignore(const char *name) {
  * @brief Set the default ignore list
  */
 void default_ignores(void) {
-    add_ignore(szTitle);
+    add_ignore(szWindowClass);
     add_ignore("Program Manager");
-    //add_ignore("Slack");
 }
 
 /**
@@ -376,7 +462,7 @@ LRESULT mouse_hook(int code,WPARAM w_param,LPARAM l_param) {
 }
 
 /**
- * @brief Mouse down
+ * @brief Left button down
  * @param w_param
  * @param l_param
  */
@@ -414,6 +500,7 @@ void wm_rbuttondown(WPARAM w_param, LPARAM l_param) {
         AppendMenuA(hmenu,MF_SEPARATOR,0,0);
         AppendMenuA(hmenu,MF_STRING,1,"Application");
         AppendMenuA(hmenu,MF_SEPARATOR,0,0);
+        AppendMenuA(hmenu,MF_STRING,ID_AOT,"Always On &Top");
         AppendMenuA(hmenu,MF_STRING,ID_Lock,"&Lock");
         AppendMenuA(hmenu,MF_STRING,ID_About,"&About");
         AppendMenuA(hmenu,MF_STRING,ID_Exit,"E&xit");
@@ -429,6 +516,13 @@ void wm_rbuttondown(WPARAM w_param, LPARAM l_param) {
             case ID_Lock:
                 ++_state._locked;
                 _state._locked&=1;
+                save_position();
+                break;
+            case ID_AOT:
+                ++_state._always_on_top;
+                _state._always_on_top&=1;
+                save_position();
+                position_window();
                 break;
             case ID_About:
                 about();
@@ -453,11 +547,14 @@ void wm_rbuttondown(WPARAM w_param, LPARAM l_param) {
 void wm_lbuttonup(WPARAM w_param,LPARAM l_param) {
     (void)w_param;
     (void)l_param;
-	_state._dragging=0;
-	if (_state._mouse_hook) {
-		//UnhookWindowsHookEx(_state._mouse_hook);
-		_state._mouse_hook = 0;
-	}
+    if(_state._dragging) {
+        _state._dragging=0;
+        save_position();
+    }
+    if (_state._mouse_hook) {
+        //UnhookWindowsHookEx(_state._mouse_hook);
+        _state._mouse_hook = 0;
+    }
 }
 
 /**
