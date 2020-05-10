@@ -42,6 +42,8 @@ SOFTWARE.
 #include <stdint.h>
 #include <time.h>
 
+#include "mdeskdll.h"
+
 // Desktop current window information
 typedef struct {
     uint32_t _n_hwnd;
@@ -64,7 +66,6 @@ typedef struct {
     uint32_t _always_on_top;
     HINSTANCE _hinstance;
     HWND _hwnd;
-    HHOOK _mouse_hook;
     uint32_t _x,_y,_w,_h;
     uint8_t _dragging;
     uint32_t _dx,_dy;
@@ -341,7 +342,6 @@ uint8_t ignore(const char *name) {
 
     if(!ignore) {
         for(Ignore *check=_state._ignore;check;check=check->_next) {
-            //if(!strcmpi(name,check->_name)) {
             if(strstr(name,check->_name)) {
                 ++ignore;
                 Log("[I] %s\n",name);
@@ -436,32 +436,6 @@ void show_windows(void) {
 }
 
 /**
- * @brief Mouse hook
- * @param code
- * @param w_param
- * @param l_param
- * @return
- */
-LRESULT mouse_hook(int code,WPARAM w_param,LPARAM l_param) {
-    if(code>=0) {
-        switch(w_param) {
-            case WM_RBUTTONUP: {
-                //unhook();
-                break;
-            }
-            case WM_MOUSEMOVE: {
-                MOUSEHOOKSTRUCT *ptr=(MOUSEHOOKSTRUCT *)l_param;
-                _state._x=ptr->pt.x-_state._dx;
-                _state._y=ptr->pt.y-_state._dy;
-                position_window();
-                break;
-            }
-        }
-    }
-    return CallNextHookEx(_state._mouse_hook,code,w_param,l_param);
-}
-
-/**
  * @brief Left button down
  * @param w_param
  * @param l_param
@@ -472,19 +446,13 @@ void wm_lbuttondown(WPARAM w_param,LPARAM l_param) {
         _state._dragging++;
         _state._dx=GET_X_LPARAM(l_param);
         _state._dy=GET_Y_LPARAM(l_param);
-
-        // hook it or you're nobody
-        /*
-        if(_state._mouse_hook==0) {
-            _state._mouse_hook=SetWindowsHookEx(WH_MOUSE_LL,mouse_hook,0,0);
-            if(!_state._mouse_hook) {
-                MessageBeep(MB_ICONERROR);
-            }
-        }
-        else {
-            MessageBeep(MB_ICONERROR);
-        }
-         */
+        // hook the mouse cursor
+        mdeskdll_hook(_state._hwnd,
+                      _state._dx,
+                      _state._dy,
+                      _state._w,
+                      _state._h,
+                      _state._always_on_top);
     }
 }
 
@@ -549,27 +517,11 @@ void wm_lbuttonup(WPARAM w_param,LPARAM l_param) {
     (void)l_param;
     if(_state._dragging) {
         _state._dragging=0;
+        POINT p;
+        GetCursorPos(&p);
+        _state._x=p.x-_state._dx;
+        _state._y=p.y-_state._dy;
         save_position();
-    }
-    if (_state._mouse_hook) {
-        //UnhookWindowsHookEx(_state._mouse_hook);
-        _state._mouse_hook = 0;
-    }
-}
-
-/**
- * @brief Mouse move
- * @param w_param
- * @param l_param
- */
-void wm_mousemove(WPARAM w_param,LPARAM l_param) {
-    (void)w_param;
-    if(_state._dragging) {
-        // move to the new place
-        _state._x+=GET_X_LPARAM(l_param)-_state._dx;
-        _state._y+=GET_Y_LPARAM(l_param)-_state._dy;
-        position_window();
-        Log("[%d, %d]\n",_state._x,_state._y);
     }
 }
 
@@ -678,9 +630,6 @@ LRESULT CALLBACK WndProc(HWND hWnd,UINT message,WPARAM w_param,LPARAM l_param)
 		case WM_LBUTTONUP:      // cleanup drag
 			wm_lbuttonup(w_param, l_param);
 			break;
-        case WM_MOUSEMOVE:      // handle drag
-            wm_mousemove(w_param,l_param);
-            break;
         case WM_RBUTTONDOWN:    // show popup menu
             wm_rbuttondown(w_param,l_param);
             break;
